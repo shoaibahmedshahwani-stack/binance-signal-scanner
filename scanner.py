@@ -9,26 +9,15 @@ import pandas_ta as ta
 from email.message import EmailMessage
 from datetime import datetime, timezone
 
-# ==========================================
-# BINANCE SUPER TREND SIGNAL SCANNER
-# ==========================================
-
 BINANCE_URL = "https://fapi.binance.com"
-
 TIMEFRAME = "1h"
 CANDLE_LIMIT = 50
-
 SUPERTREND_LENGTH = 10
 SUPERTREND_MULTIPLIER = 3
-
 REQUEST_TIMEOUT = 20
 
 
-# ==========================================
-# EMAIL ALERT
-# ==========================================
-
-def send_email_alert(message):
+def send_email_alert(message, subject="Binance Supertrend Signals"):
 
     gmail_address = os.getenv("GMAIL_ADDRESS")
     gmail_password = os.getenv("GMAIL_APP_PASSWORD")
@@ -39,7 +28,7 @@ def send_email_alert(message):
         return False
 
     email = EmailMessage()
-    email["Subject"] = "Binance Supertrend Trading Signals"
+    email["Subject"] = subject
     email["From"] = gmail_address
     email["To"] = receiver_email
     email.set_content(message)
@@ -49,17 +38,13 @@ def send_email_alert(message):
             server.login(gmail_address, gmail_password)
             server.send_message(email)
 
-        print("Email alert sent successfully!")
+        print("EMAIL SENT SUCCESSFULLY!")
         return True
 
     except Exception as e:
-        print("Email error:", str(e))
+        print("EMAIL ERROR:", str(e))
         return False
 
-
-# ==========================================
-# GET BINANCE USDT PERPETUAL SYMBOLS
-# ==========================================
 
 def get_symbols():
 
@@ -70,23 +55,14 @@ def get_symbols():
 
     data = response.json()
 
-    symbols = []
+    return [
+        item["symbol"]
+        for item in data["symbols"]
+        if item["quoteAsset"] == "USDT"
+        and item["contractType"] == "PERPETUAL"
+        and item["status"] == "TRADING"
+    ]
 
-    for item in data["symbols"]:
-
-        if (
-            item["quoteAsset"] == "USDT"
-            and item["contractType"] == "PERPETUAL"
-            and item["status"] == "TRADING"
-        ):
-            symbols.append(item["symbol"])
-
-    return symbols
-
-
-# ==========================================
-# GET HOURLY CANDLES
-# ==========================================
 
 def get_klines(symbol):
 
@@ -106,24 +82,13 @@ def get_klines(symbol):
 
     response.raise_for_status()
 
-    data = response.json()
-
     columns = [
-        "open_time",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "close_time",
-        "quote_volume",
-        "trades",
-        "taker_buy_base",
-        "taker_buy_quote",
-        "ignore"
+        "open_time", "open", "high", "low", "close",
+        "volume", "close_time", "quote_volume", "trades",
+        "taker_buy_base", "taker_buy_quote", "ignore"
     ]
 
-    df = pd.DataFrame(data, columns=columns)
+    df = pd.DataFrame(response.json(), columns=columns)
 
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -131,14 +96,9 @@ def get_klines(symbol):
     return df
 
 
-# ==========================================
-# CHECK SUPERTREND SIGNAL
-# ==========================================
-
 def check_signal(symbol):
 
     try:
-
         df = get_klines(symbol)
 
         if len(df) < 30:
@@ -168,37 +128,23 @@ def check_signal(symbol):
             errors="coerce"
         )
 
-        # Last 24 CLOSED candles
         recent_24 = direction.iloc[-25:-1]
 
         if len(recent_24) != 24 or recent_24.isna().any():
             return None
 
-        # Latest closed candle
         latest_close = df["close"].iloc[-2]
-
-        # Previous closed candle
         previous_low = df["low"].iloc[-3]
         previous_high = df["high"].iloc[-3]
 
-        # LONG CONDITION
-        if (
-            (recent_24 == 1).all()
-            and latest_close > previous_high
-        ):
-
+        if (recent_24 == 1).all() and latest_close > previous_high:
             return {
                 "symbol": symbol,
                 "signal": "LONG",
                 "price": latest_close
             }
 
-        # SHORT CONDITION
-        if (
-            (recent_24 == -1).all()
-            and latest_close < previous_low
-        ):
-
+        if (recent_24 == -1).all() and latest_close < previous_low:
             return {
                 "symbol": symbol,
                 "signal": "SHORT",
@@ -208,13 +154,9 @@ def check_signal(symbol):
         return None
 
     except Exception as e:
-        print(f"{symbol} error: {e}")
+        print(f"{symbol} ERROR: {e}")
         return None
 
-
-# ==========================================
-# MAIN SCANNER
-# ==========================================
 
 def main():
 
@@ -223,10 +165,29 @@ def main():
     print("Time:", datetime.now(timezone.utc))
     print("=" * 45)
 
+    # Manual GitHub run par email connection test
+    if os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch":
+
+        test_message = (
+            "GMAIL CONNECTION TEST SUCCESSFUL!\n\n"
+            "Your Binance Supertrend scanner is connected "
+            "to Gmail successfully.\n\n"
+            "Time: "
+            + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        )
+
+        test_sent = send_email_alert(
+            test_message,
+            "TEST EMAIL - Binance Scanner"
+        )
+
+        if not test_sent:
+            print("WARNING: Test email could not be sent.")
+
     try:
         symbols = get_symbols()
     except Exception as e:
-        print("Unable to fetch Binance symbols:", e)
+        print("BINANCE SYMBOL ERROR:", e)
         return
 
     print("Total USDT perpetual symbols:", len(symbols))
@@ -245,10 +206,6 @@ def main():
 
         time.sleep(0.05)
 
-    # ======================================
-    # SEND ALL SIGNALS IN ONE EMAIL
-    # ======================================
-
     if signals:
 
         message = (
@@ -259,7 +216,6 @@ def main():
         )
 
         for signal in signals:
-
             message += (
                 f"Symbol: {signal['symbol']}\n"
                 f"Signal: {signal['signal']}\n"
@@ -270,14 +226,10 @@ def main():
         send_email_alert(message)
 
     else:
-
         print("No trading signals found.")
 
-    print("=" * 45)
     print("SCANNING COMPLETED")
-    print("=" * 45)
 
 
 if __name__ == "__main__":
     main()
-
